@@ -24,6 +24,7 @@ type githubRelease struct {
 	Tag      string        `json:"tag_name"`
 	Prelease bool          `json:"prerelease"`
 	Assets   []githubAsset `json:"assets"`
+	isNewer  bool
 }
 
 type githubAsset struct {
@@ -38,34 +39,18 @@ func upgrade() error {
 		return errors.New("Upgrade currently unsupported on Windows")
 	}
 
+	rel := latestRelease()
+	l.Infoln(rel)
+
+	if !rel.isNewer {
+		l.Okf("Already running the latest version, %s. Not upgrading.", Version)
+		return nil
+	}
+	l.Infof("Attempting upgrade to %s...", rel.Tag)
+
 	path, err := osext.Executable()
 	if err != nil {
 		return err
-	}
-
-	resp, err := http.Get("https://api.github.com/repos/calmh/syncthing/releases?per_page=1")
-	if err != nil {
-		return err
-	}
-
-	var rels []githubRelease
-	json.NewDecoder(resp.Body).Decode(&rels)
-	resp.Body.Close()
-
-	if len(rels) != 1 {
-		return fmt.Errorf("Unexpected number of releases: %d", len(rels))
-	}
-	rel := rels[0]
-
-	switch compareVersions(rel.Tag, Version) {
-	case -1:
-		l.Okf("Current version %s is newer than latest release %s. Not upgrading.", Version, rel.Tag)
-		return nil
-	case 0:
-		l.Okf("Already running the latest version, %s. Not upgrading.", Version)
-		return nil
-	default:
-		l.Infof("Attempting upgrade to %s...", rel.Tag)
 	}
 
 	expectedRelease := fmt.Sprintf("syncthing-%s-%s%s-%s.", runtime.GOOS, runtime.GOARCH, GoArchExtra, rel.Tag)
@@ -152,6 +137,26 @@ func readTarGZ(url string, dir string) (string, error) {
 	}
 
 	return "", fmt.Errorf("No upgrade found")
+}
+
+func latestRelease() githubRelease {
+	resp, err := http.Get("https://api.github.com/repos/calmh/syncthing/releases?per_page=1")
+	if err != nil {
+		return githubRelease{}
+	}
+
+	var rels []githubRelease
+	json.NewDecoder(resp.Body).Decode(&rels)
+	resp.Body.Close()
+
+	if len(rels) != 1 {
+		return githubRelease{}
+	}
+
+	rel := rels[0]
+	rel.isNewer = compareVersions(rel.Tag, Version) == 1
+
+	return rel
 }
 
 func compareVersions(a, b string) int {

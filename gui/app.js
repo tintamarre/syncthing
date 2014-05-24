@@ -20,6 +20,7 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http) {
     $scope.seenError = '';
     $scope.model = {};
     $scope.repos = {};
+    $scope.release = {};
 
     // Strings before bools look better
     $scope.settings = [
@@ -488,6 +489,10 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http) {
 
         $http.get(urlbase + '/config/sync').success(function (data) {
             $scope.configInSync = data.configInSync;
+        });
+
+        $http.get(urlbase + '/release').success(function (data) {
+            $scope.release = data;
         });
     };
 

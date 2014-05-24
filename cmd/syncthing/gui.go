@@ -90,6 +90,7 @@ func startGUI(cfg config.GUIConfiguration, assetDir string, m *model.Model) erro
 	router.Get("/rest/system", restGetSystem)
 	router.Get("/rest/errors", restGetErrors)
 	router.Get("/rest/discovery", restGetDiscovery)
+	router.Get("/rest/release", restGetRelease)
 	router.Get("/qr/:text", getQR)
 
 	router.Post("/rest/config", restPostConfig)
@@ -299,6 +300,14 @@ func restPostDiscoveryHint(r *http.Request) {
 
 func restGetDiscovery(w http.ResponseWriter) {
 	json.NewEncoder(w).Encode(discoverer.All())
+}
+
+func restGetRelease(w http.ResponseWriter) {
+	rel := latestRelease()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"release": rel.Tag,
+		"newer":   true, //rel.isNewer,
+	})
 }
 
 func getQR(w http.ResponseWriter, params martini.Params) {
