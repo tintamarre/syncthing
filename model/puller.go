@@ -337,7 +337,7 @@ func (p *puller) handleRequestResult(res requestResult) {
 	}
 
 	if of.done && of.outstanding == 0 {
-		p.closeFile(f)
+		p.closeFile(f, nil)
 	}
 }
 
@@ -373,34 +373,10 @@ func (p *puller) handleBlock(b bqBlock) bool {
 	of.done = b.last
 
 	if !ok {
-		if debug {
-			l.Debugf("pull: %q: opening file %q", p.repoCfg.ID, f.Name)
-		}
-
-		of.availability = uint64(p.model.repoFiles[p.repoCfg.ID].Availability(f.Name))
-		of.filepath = filepath.Join(p.repoCfg.Directory, f.Name)
-		of.temp = filepath.Join(p.repoCfg.Directory, defTempNamer.TempName(f.Name))
-
-		dirName := filepath.Dir(of.filepath)
-		_, err := os.Stat(dirName)
-		if err != nil {
-			err = os.MkdirAll(dirName, 0777)
-		}
-		if err != nil {
-			l.Debugf("pull: error: %q / %q: %v", p.repoCfg.ID, f.Name, err)
-		}
-
-		of.file, of.err = os.Create(of.temp)
-		if of.err != nil {
-			if debug {
-				l.Debugf("pull: error: %q / %q: %v", p.repoCfg.ID, f.Name, of.err)
-			}
-			if !b.last {
-				p.openFiles[f.Name] = of
-			}
+		if err := p.openFile(f); err != nil {
 			return true
 		}
-		osutil.HideFile(of.temp)
+		of = p.openFiles[f.Name]
 	}
 
 	if of.err != nil {
@@ -446,10 +422,7 @@ func (p *puller) handleCopyBlock(b bqBlock) {
 		if debug {
 			l.Debugf("pull: error: %q / %q: %v", p.repoCfg.ID, f.Name, of.err)
 		}
-		of.file.Close()
-		of.file = nil
-
-		p.openFiles[f.Name] = of
+		p.closeFile(f, of.err)
 		return
 	}
 	defer exfd.Close()
@@ -466,10 +439,7 @@ func (p *puller) handleCopyBlock(b bqBlock) {
 				l.Debugf("pull: error: %q / %q: %v", p.repoCfg.ID, f.Name, of.err)
 			}
 			exfd.Close()
-			of.file.Close()
-			of.file = nil
-
-			p.openFiles[f.Name] = of
+			p.closeFile(f, of.err)
 			return
 		}
 	}
@@ -487,17 +457,7 @@ func (p *puller) handleRequestBlock(b bqBlock) bool {
 
 	node := p.oustandingPerNode.leastBusyNode(of.availability, p.model.cm)
 	if len(node) == 0 {
-		of.err = errNoNode
-		if of.file != nil {
-			of.file.Close()
-			of.file = nil
-			os.Remove(of.temp)
-		}
-		if b.last {
-			delete(p.openFiles, f.Name)
-		} else {
-			p.openFiles[f.Name] = of
-		}
+		p.closeFile(f, errNoNode)
 		return true
 	}
 
@@ -587,14 +547,60 @@ func (p *puller) queueNeededBlocks() {
 	}
 }
 
-func (p *puller) closeFile(f scanner.File) {
+func (p *puller) openFile(f scanner.File) error {
 	if debug {
-		l.Debugf("pull: closing %q / %q", p.repoCfg.ID, f.Name)
+		l.Debugf("pull: %q: opening file %q", p.repoCfg.ID, f.Name)
 	}
 
 	of := p.openFiles[f.Name]
+	of.availability = uint64(p.model.repoFiles[p.repoCfg.ID].Availability(f.Name))
+	of.filepath = filepath.Join(p.repoCfg.Directory, f.Name)
+	of.temp = filepath.Join(p.repoCfg.Directory, defTempNamer.TempName(f.Name))
+
+	dirName := filepath.Dir(of.filepath)
+	_, err := os.Stat(dirName)
+	if err != nil {
+		err = os.MkdirAll(dirName, 0777)
+	}
+	if err != nil {
+		l.Debugf("pull: error: %q / %q: %v", p.repoCfg.ID, f.Name, err)
+	}
+
+	of.file, of.err = os.Create(of.temp)
+	if of.err != nil {
+		if debug {
+			l.Debugf("pull: error: %q / %q: %v", p.repoCfg.ID, f.Name, of.err)
+		}
+	} else {
+		osutil.HideFile(of.temp)
+	}
+
+	p.openFiles[f.Name] = of
+	return of.err
+}
+
+func (p *puller) closeFile(f scanner.File, err error) {
+	if debug {
+		l.Debugf("pull: closing %q / %q (err: %v)", p.repoCfg.ID, f.Name, err)
+	}
+
+	of, ok := p.openFiles[f.Name]
+	if !ok {
+		return
+	}
+
 	of.file.Close()
 	defer os.Remove(of.temp)
+
+	if err != nil {
+		if of.done && of.outstanding == 0 {
+			delete(p.openFiles, f.Name)
+		} else {
+			of.err = err
+			p.openFiles[f.Name] = of
+		}
+		return
+	}
 
 	delete(p.openFiles, f.Name)
 
