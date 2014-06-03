@@ -26,6 +26,12 @@ import (
 	"github.com/calmh/syncthing/scanner"
 )
 
+type repoActivity struct {
+	state     repoState
+	scanTotal uint64
+	scanDone  uint64
+}
+
 type repoState int
 
 const (
@@ -55,7 +61,7 @@ type Model struct {
 	suppressor map[string]*suppressor                    // repo -> suppressor
 	rmut       sync.RWMutex                              // protects the above
 
-	repoState map[string]repoState // repo -> state
+	repoState map[string]repoActivity // repo -> state
 	smut      sync.RWMutex
 
 	cm *cid.Map
@@ -89,7 +95,7 @@ func NewModel(indexDir string, cfg *config.Configuration, clientName, clientVers
 		repoFiles:     make(map[string]*files.Set),
 		repoNodes:     make(map[string][]string),
 		nodeRepos:     make(map[string][]string),
-		repoState:     make(map[string]repoState),
+		repoState:     make(map[string]repoActivity),
 		suppressor:    make(map[string]*suppressor),
 		cm:            cid.NewMap(),
 		protoConn:     make(map[string]protocol.Connection),
@@ -806,13 +812,32 @@ func (m *Model) clusterConfig(node string) protocol.ClusterConfigMessage {
 
 func (m *Model) setState(repo string, state repoState) {
 	m.smut.Lock()
-	m.repoState[repo] = state
+	cur := m.repoState[repo]
+	cur.state = state
+	m.repoState[repo] = cur
+	m.smut.Unlock()
+}
+
+func (m *Model) setScanningTotal(repo string, total uint64) {
+	m.smut.Lock()
+	cur := m.repoState[repo]
+	cur.scanTotal = total
+	cur.scanDone = 0
+	m.repoState[repo] = cur
+	m.smut.Unlock()
+}
+
+func (m *Model) setScanningDone(repo string, done uint64) {
+	m.smut.Lock()
+	cur := m.repoState[repo]
+	cur.scanDone += done
+	m.repoState[repo] = cur
 	m.smut.Unlock()
 }
 
 func (m *Model) State(repo string) string {
 	m.smut.RLock()
-	state := m.repoState[repo]
+	state := m.repoState[repo].state
 	m.smut.RUnlock()
 	switch state {
 	case RepoIdle:
@@ -826,4 +851,11 @@ func (m *Model) State(repo string) string {
 	default:
 		return "unknown"
 	}
+}
+
+func (m *Model) Scanning(repo string) (total, done uint64) {
+	m.smut.RLock()
+	state := m.repoState[repo]
+	m.smut.RUnlock()
+	return state.scanTotal, state.scanDone
 }

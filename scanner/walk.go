@@ -90,6 +90,13 @@ func (w *Walker) Walk() (files []File, ignore map[string][]string, err error) {
 
 	// Start one or more hasher routines
 
+	var scanTotal, scanDone uint64
+	for i, f := range files {
+		if !protocol.IsDirectory(f.Flags) && f.Blocks == nil {
+			scanTotal += uint64(f.Size)
+		}
+	}
+
 	indexes := make(chan int)
 	var wg sync.WaitGroup
 	wg.Add(w.HashRoutines)
