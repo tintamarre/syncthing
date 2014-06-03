@@ -679,6 +679,7 @@ func (m *Model) ScanRepo(repo string) error {
 		Suppressor:   m.suppressor[repo],
 		CurrentFiler: cFiler{m, repo},
 		IgnorePerms:  m.repoCfgs[repo].IgnorePerms,
+		HashRoutines: 4,
 	}
 	m.rmut.RUnlock()
 	m.setState(repo, RepoScanning)

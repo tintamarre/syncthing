@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/calmh/syncthing/lamport"
@@ -36,7 +37,8 @@ type Walker struct {
 	// If IgnorePerms is true, changes to permission bits will not be
 	// detected. Scanned files will get zero permission bits and the
 	// NoPermissionBits flag set.
-	IgnorePerms bool
+	IgnorePerms  bool
+	HashRoutines int
 }
 
 type TempNamer interface {
@@ -63,6 +65,10 @@ func (w *Walker) Walk() (files []File, ignore map[string][]string, err error) {
 		l.Debugln("Walk", w.Dir, w.BlockSize, w.IgnoreFile)
 	}
 
+	if w.HashRoutines < 1 {
+		w.HashRoutines = 1
+	}
+
 	err = checkDir(w.Dir)
 	if err != nil {
 		return
@@ -81,6 +87,38 @@ func (w *Walker) Walk() (files []File, ignore map[string][]string, err error) {
 		d := t1.Sub(t0).Seconds()
 		l.Debugf("Walk in %.02f ms, %.0f files/s", d*1000, float64(len(files))/d)
 	}
+
+	// Start one or more hasher routines
+
+	indexes := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(w.HashRoutines)
+	for c := 0; c < w.HashRoutines; c++ {
+		go func() {
+			for i := range indexes {
+				blocks := w.blocksFor(filepath.Join(w.Dir, files[i].Name))
+				if blocks == nil {
+					files[i].Flags |= protocol.FlagInvalid
+				} else {
+					files[i].Blocks = blocks
+				}
+			}
+			wg.Done()
+		}()
+	}
+
+	// Feed the hashers the files to hash
+
+	for i, f := range files {
+		if !protocol.IsDirectory(f.Flags) && f.Blocks == nil {
+			indexes <- i
+		}
+	}
+
+	// Await hashing completion
+
+	close(indexes)
+	wg.Wait()
 
 	err = checkDir(w.Dir)
 	return
@@ -222,28 +260,6 @@ func (w *Walker) walkAndHashFiles(res *[]File, ign map[string][]string) filepath
 				}
 			}
 
-			fd, err := os.Open(p)
-			if err != nil {
-				if debug {
-					l.Debugln("open:", p, err)
-				}
-				return nil
-			}
-			defer fd.Close()
-
-			t0 := time.Now()
-			blocks, err := Blocks(fd, w.BlockSize)
-			if err != nil {
-				if debug {
-					l.Debugln("hash error:", rn, err)
-				}
-				return nil
-			}
-			if debug {
-				t1 := time.Now()
-				l.Debugln("hashed:", rn, ";", len(blocks), "blocks;", info.Size(), "bytes;", int(float64(info.Size())/1024/t1.Sub(t0).Seconds()), "KB/s")
-			}
-
 			var flags = uint32(info.Mode() & os.ModePerm)
 			if w.IgnorePerms {
 				flags = protocol.FlagNoPermBits | 0666
@@ -254,13 +270,36 @@ func (w *Walker) walkAndHashFiles(res *[]File, ign map[string][]string) filepath
 				Size:     info.Size(),
 				Flags:    flags,
 				Modified: info.ModTime().Unix(),
-				Blocks:   blocks,
 			}
 			*res = append(*res, f)
 		}
 
 		return nil
 	}
+}
+
+func (w *Walker) blocksFor(p string) []Block {
+	fd, err := os.Open(p)
+	if err != nil {
+		if debug {
+			l.Debugln("open:", p, err)
+		}
+		return nil
+	}
+	defer fd.Close()
+
+	blocks, err := Blocks(fd, w.BlockSize)
+	if err != nil {
+		if debug {
+			l.Debugln("hash error:", p, err)
+		}
+		return nil
+	}
+	if debug {
+		l.Debugln("hashed:", p, ";", len(blocks), "blocks;")
+	}
+
+	return blocks
 }
 
 func (w *Walker) cleanTempFile(path string, info os.FileInfo, err error) error {
