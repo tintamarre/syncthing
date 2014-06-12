@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image/png"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -23,12 +24,14 @@ import (
 
 	"crypto/tls"
 	"code.google.com/p/go.crypto/bcrypt"
+	"github.com/boombuler/barcode"
+	"github.com/boombuler/barcode/datamatrix"
+	"github.com/boombuler/barcode/qr"
 	"github.com/calmh/syncthing/auto"
 	"github.com/calmh/syncthing/config"
 	"github.com/calmh/syncthing/logger"
 	"github.com/calmh/syncthing/model"
 	"github.com/codegangsta/martini"
-	"github.com/vitrun/qart/qr"
 )
 
 type guiError struct {
@@ -100,6 +103,7 @@ func startGUI(cfg config.GUIConfiguration, assetDir string, m *model.Model) erro
 	router.Get("/rest/discovery", restGetDiscovery)
 	router.Get("/rest/report", restGetReport)
 	router.Get("/qr/:text", getQR)
+	router.Get("/dm/:text", getDM)
 
 	router.Post("/rest/config", restPostConfig)
 	router.Post("/rest/restart", restPostRestart)
@@ -379,14 +383,35 @@ func restGetReport(w http.ResponseWriter, m *model.Model) {
 }
 
 func getQR(w http.ResponseWriter, params martini.Params) {
-	code, err := qr.Encode(params["text"], qr.M)
+	bc, err := qr.Encode(params["text"], qr.M, qr.AlphaNumeric)
+	if err != nil {
+		http.Error(w, "Invalid", 500)
+		return
+	}
+	bc, err = barcode.Scale(bc, 220, 220)
 	if err != nil {
 		http.Error(w, "Invalid", 500)
 		return
 	}
 
 	w.Header().Set("Content-Type", "image/png")
-	w.Write(code.PNG())
+	png.Encode(w, bc)
+}
+
+func getDM(w http.ResponseWriter, params martini.Params) {
+	bc, err := datamatrix.Encode(params["text"])
+	if err != nil {
+		http.Error(w, "Invalid", 500)
+		return
+	}
+	bc, err = barcode.Scale(bc, 220, 220)
+	if err != nil {
+		http.Error(w, "Invalid", 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/png")
+	png.Encode(w, bc)
 }
 
 func basic(username string, passhash string) http.HandlerFunc {
