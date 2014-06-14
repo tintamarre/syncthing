@@ -74,6 +74,31 @@ func (b *Beacon) reader() {
 
 func (b *Beacon) writer() {
 	for bs := range b.inbox {
+		// Send IPv6 multicasts
+
+		intfs, err := net.Interfaces()
+		if err != nil {
+			l.Warnln("Beacon: interface addresses:", err)
+			continue
+		}
+
+		ip := net.ParseIP("ff02::2012:1025")
+		for _, intf := range intfs {
+			if intf.Flags&net.FlagMulticast != 0 {
+				dst := &net.UDPAddr{IP: ip, Port: b.port, Zone: intf.Name}
+				b.conn.WriteTo(bs, dst)
+				_, err := b.conn.WriteTo(bs, dst)
+				if err != nil {
+					if debug {
+						l.Debugln(err)
+					}
+				} else if debug {
+					l.Debugf("sent %d bytes to %s", len(bs), dst)
+				}
+			}
+		}
+
+		// Send IPv4 broadcasts
 
 		addrs, err := net.InterfaceAddrs()
 		if err != nil {
