@@ -128,13 +128,21 @@ func main() {
 	var reset bool
 	var showVersion bool
 	var doUpgrade bool
+	var doFreeConsole bool
 	flag.StringVar(&confDir, "home", getDefaultConfDir(), "Set configuration directory")
 	flag.BoolVar(&reset, "reset", false, "Prepare to resync from cluster")
 	flag.BoolVar(&showVersion, "version", false, "Show version")
 	flag.BoolVar(&doUpgrade, "upgrade", false, "Perform upgrade")
 	flag.IntVar(&logFlags, "logflags", logFlags, "Set log flags")
+	if runtime.GOOS == "windows" {
+		flag.BoolVar(&doFreeConsole, "no-console", false, "Disable console")
+	}
 	flag.Usage = usageFor(flag.CommandLine, usage, extraUsage)
 	flag.Parse()
+
+	if doFreeConsole {
+		freeConsole()
+	}
 
 	if showVersion {
 		fmt.Println(LongVersion)
