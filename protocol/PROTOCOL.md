@@ -70,7 +70,7 @@ endian.
      0                   1                   2                   3
      0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    |  Ver  |       Message ID      |      Type     |    Reserved   |
+    |  Ver  |       Message ID      |      Type     |   Reserved  |C|
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
 For BEP v1 the Version field is set to zero. Future versions with
@@ -92,10 +92,21 @@ The Type field indicates the type of data following the message header
 and is one of the integers defined below. A message of an unknown type
 is a protocol error and MUST result in the connection being terminated.
 
-All data following the message header MUST be in XDR (RFC 1014)
-encoding. All fields shorter than 32 bits and all variable length data
-MUST be padded to a multiple of 32 bits. The actual data types in use by
-BEP, in XDR naming convention, are the following:
+The C bit indicates that payload compression is used.
+
+The message header is followed directly by either:
+
+ * uncompressed payload data (C=0), or
+
+ * a 32 bit length field and an LZ4 compressed block of payload data
+   (C=1).
+
+The length field, when present, indicates the length of the compressed
+payload data. All payload data, uncompressed or within the compressed
+block, MUST be in XDR (RFC 1014) encoding. All fields shorter than 32
+bits and all variable length data MUST be padded to a multiple of 32
+bits. The actual data types in use by BEP, in XDR naming convention, are
+the following:
 
  - (unsigned) int   -- (unsigned) 32 bit integer
  - (unsigned) hyper -- (unsigned) 64 bit integer
