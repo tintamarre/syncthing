@@ -2,6 +2,7 @@ package files
 
 import (
 	"bytes"
+	"encoding/binary"
 	"sort"
 	"sync"
 
@@ -32,6 +33,7 @@ func clock(v uint64) uint64 {
 const (
 	keyTypeNode = iota
 	keyTypeGlobal
+	keyTypeAux
 )
 
 type fileVersion struct {
@@ -81,6 +83,11 @@ keyTypeGlobal (1 byte)
 			|
 			[]fileVersion (sorted)
 
+keyTypeAux (1 byte)
+	name (variable size)
+		|
+		data (various types)
+
 */
 
 func nodeKey(repo, node, file []byte) []byte {
@@ -98,6 +105,22 @@ func globalKey(repo, file []byte) []byte {
 	copy(k[1:], []byte(repo))
 	copy(k[1+64:], []byte(file))
 	return k
+}
+
+func auxKey(name []byte) []byte {
+	return append([]byte{keyTypeAux}, name...)
+}
+
+func upperLVKey(repo, node []byte) []byte {
+	k := append([]byte("upperLV"), repo...)
+	k = append(k, node...)
+	return auxKey(k)
+}
+
+func lowerLVKey(repo, node []byte) []byte {
+	k := append([]byte("lowerLV"), repo...)
+	k = append(k, node...)
+	return auxKey(k)
 }
 
 func nodeKeyName(key []byte) []byte {
@@ -200,6 +223,19 @@ func ldbGenericReplace(db *leveldb.DB, repo, node []byte, fs []protocol.FileInfo
 		}
 	}
 
+	if maxLocalVer > 0 {
+		ldbSetLVLowerBound(batch, repo, node, maxLocalVer)
+
+		// Write a new upper bound for the Local Version before we write the updates themselves.
+		preBatch := new(leveldb.Batch)
+		ldbSetLVUpperBound(preBatch, repo, node, maxLocalVer)
+		err = db.Write(preBatch, nil)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	// Then write the update and the lower bound of the Local Version
 	err = db.Write(batch, nil)
 	if err != nil {
 		panic(err)
@@ -657,4 +693,33 @@ func ldbWithNeed(db *leveldb.DB, repo, node []byte, fn fileIterator) {
 			}
 		}
 	}
+}
+
+func ldbSetLVLowerBound(db dbWriter, repo, node []byte, lv uint64) {
+	k := lowerLVKey(repo, node)
+	ldbSetAuxUint64(db, k, lv)
+}
+func ldbSetLVUpperBound(db dbWriter, repo, node []byte, lv uint64) {
+	k := upperLVKey(repo, node)
+	ldbSetAuxUint64(db, k, lv)
+}
+func ldbSetAuxUint64(db dbWriter, name []byte, val uint64) {
+	var v [8]byte
+	binary.BigEndian.PutUint64(v[:], val)
+	db.Put(name, v[:])
+}
+func ldbGetLVLowerBound(db dbReader, repo, node []byte) uint64 {
+	k := lowerLVKey(repo, node)
+	return ldbGetAuxUint64(db, k)
+}
+func ldbGetLVUpperBound(db dbReader, repo, node []byte) uint64 {
+	k := upperLVKey(repo, node)
+	return ldbGetAuxUint64(db, k)
+}
+func ldbGetAuxUint64(db dbReader, name []byte) uint64 {
+	v, err := db.Get(name, nil)
+	if err != nil {
+		return 0
+	}
+	return binary.BigEndian.Uint64(v)
 }

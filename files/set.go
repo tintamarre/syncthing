@@ -8,7 +8,6 @@ package files
 import (
 	"sync"
 
-	"github.com/calmh/syncthing/lamport"
 	"github.com/calmh/syncthing/protocol"
 	"github.com/syndtr/goleveldb/leveldb"
 )
@@ -22,32 +21,18 @@ type fileRecord struct {
 type bitset uint64
 
 type Set struct {
-	localVersion map[protocol.NodeID]uint64
-	mutex        sync.Mutex
-	repo         string
-	db           *leveldb.DB
+	mutex sync.Mutex
+	repo  string
+	db    *leveldb.DB
 }
 
 func NewSet(repo string, db *leveldb.DB) *Set {
 	var s = Set{
-		localVersion: make(map[protocol.NodeID]uint64),
-		repo:         repo,
-		db:           db,
+		repo: repo,
+		db:   db,
 	}
 
-	var nodeID protocol.NodeID
-	ldbWithAllRepo(db, []byte(repo), func(node []byte, f protocol.FileInfo) bool {
-		copy(nodeID[:], node)
-		if f.LocalVersion > s.localVersion[nodeID] {
-			s.localVersion[nodeID] = f.LocalVersion
-		}
-		lamport.Default.Tick(f.Version)
-		return true
-	})
-	if debug {
-		l.Debugf("loaded localVersion for %q: %#v", repo, s.localVersion)
-	}
-	clock(s.localVersion[protocol.LocalNodeID])
+	clock(ldbGetLVUpperBound(db, []byte(repo), protocol.LocalNodeID[:]))
 
 	return &s
 }
@@ -58,7 +43,7 @@ func (s *Set) Replace(node protocol.NodeID, fs []protocol.FileInfo) {
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	s.localVersion[node] = ldbReplace(s.db, []byte(s.repo), node[:], fs)
+	ldbReplace(s.db, []byte(s.repo), node[:], fs)
 }
 
 func (s *Set) ReplaceWithDelete(node protocol.NodeID, fs []protocol.FileInfo) {
@@ -67,9 +52,7 @@ func (s *Set) ReplaceWithDelete(node protocol.NodeID, fs []protocol.FileInfo) {
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	if lv := ldbReplaceWithDelete(s.db, []byte(s.repo), node[:], fs); lv > s.localVersion[node] {
-		s.localVersion[node] = lv
-	}
+	ldbReplaceWithDelete(s.db, []byte(s.repo), node[:], fs)
 }
 
 func (s *Set) Update(node protocol.NodeID, fs []protocol.FileInfo) {
@@ -78,9 +61,7 @@ func (s *Set) Update(node protocol.NodeID, fs []protocol.FileInfo) {
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	if lv := ldbUpdate(s.db, []byte(s.repo), node[:], fs); lv > s.localVersion[node] {
-		s.localVersion[node] = lv
-	}
+	ldbUpdate(s.db, []byte(s.repo), node[:], fs)
 }
 
 func (s *Set) WithNeed(node protocol.NodeID, fn fileIterator) {
@@ -117,7 +98,5 @@ func (s *Set) Availability(file string) []protocol.NodeID {
 }
 
 func (s *Set) LocalVersion(node protocol.NodeID) uint64 {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	return s.localVersion[node]
+	return ldbGetLVLowerBound(s.db, []byte(s.repo), node[:])
 }
