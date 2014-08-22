@@ -35,8 +35,8 @@ type DB struct {
 
 	// MemDB.
 	memMu             sync.RWMutex
-	mem               *memdb.DB
-	frozenMem         *memdb.DB
+	memPool           *util.Pool
+	mem, frozenMem    *memDB
 	journal           *journal.Writer
 	journalWriter     storage.Writer
 	journalFile       storage.File
@@ -79,6 +79,8 @@ func openDB(s *session) (*DB, error) {
 		s: s,
 		// Initial sequence
 		seq: s.stSeq,
+		// MemDB
+		memPool: util.NewPool(1),
 		// Write
 		writeC:       make(chan *Batch),
 		writeMergedC: make(chan bool),
@@ -257,6 +259,7 @@ func recoverTable(s *session, o *opt.Options) error {
 	var mSeq uint64
 	var good, corrupted int
 	rec := new(sessionRecord)
+	bpool := util.NewBufferPool(o.GetBlockSize() + 5)
 	buildTable := func(iter iterator.Iterator) (tmp storage.File, size int64, err error) {
 		tmp = s.newTemp()
 		writer, err := tmp.Create()
@@ -314,7 +317,7 @@ func recoverTable(s *session, o *opt.Options) error {
 		var tSeq uint64
 		var tgood, tcorrupted, blockerr int
 		var imin, imax []byte
-		tr := table.NewReader(reader, size, nil, o)
+		tr := table.NewReader(reader, size, nil, bpool, o)
 		iter := tr.NewIterator(nil, nil)
 		iter.(iterator.ErrorCallbackSetter).SetErrorCallback(func(err error) {
 			s.logf("table@recovery found error @%d %q", file.Num(), err)
@@ -481,10 +484,11 @@ func (db *DB) recoverJournal() error {
 
 			buf.Reset()
 			if _, err := buf.ReadFrom(r); err != nil {
-				if strict {
+				if err == io.ErrUnexpectedEOF {
+					continue
+				} else {
 					return err
 				}
-				continue
 			}
 			if err := batch.decode(buf.Bytes()); err != nil {
 				return err
@@ -558,19 +562,20 @@ func (db *DB) get(key []byte, seq uint64, ro *opt.ReadOptions) (value []byte, er
 	ikey := newIKey(key, seq, tSeek)
 
 	em, fm := db.getMems()
-	for _, m := range [...]*memdb.DB{em, fm} {
+	for _, m := range [...]*memDB{em, fm} {
 		if m == nil {
 			continue
 		}
+		defer m.decref()
 
-		mk, mv, me := m.Find(ikey)
+		mk, mv, me := m.db.Find(ikey)
 		if me == nil {
 			ukey, _, t, ok := parseIkey(mk)
 			if ok && db.s.icmp.uCompare(ukey, key) == 0 {
 				if t == tDel {
 					return nil, ErrNotFound
 				}
-				return mv, nil
+				return append([]byte{}, mv...), nil
 			}
 		} else if me != ErrNotFound {
 			return nil, me
@@ -590,8 +595,9 @@ func (db *DB) get(key []byte, seq uint64, ro *opt.ReadOptions) (value []byte, er
 // Get gets the value for the given key. It returns ErrNotFound if the
 // DB does not contain the key.
 //
-// The caller should not modify the contents of the returned slice, but
-// it is safe to modify the contents of the argument after Get returns.
+// The returned slice is its own copy, it is safe to modify the contents
+// of the returned slice.
+// It is safe to modify the contents of the argument after Get returns.
 func (db *DB) Get(key []byte, ro *opt.ReadOptions) (value []byte, err error) {
 	err = db.ok()
 	if err != nil {

@@ -30,13 +30,14 @@ func TestDefaultValues(t *testing.T) {
 		GlobalAnnEnabled:   true,
 		LocalAnnEnabled:    true,
 		LocalAnnPort:       21025,
+		LocalAnnMCAddr:     "[ff32::5222]:21026",
 		ParallelRequests:   16,
 		MaxSendKbps:        0,
-		RescanIntervalS:    60,
 		ReconnectIntervalS: 60,
-		MaxChangeKbps:      10000,
 		StartBrowser:       true,
 		UPnPEnabled:        true,
+		UPnPLease:          0,
+		UPnPRenewal:        30,
 	}
 
 	cfg, err := Load(bytes.NewReader(nil), node1)
@@ -68,6 +69,7 @@ func TestNodeConfig(t *testing.T) {
     </repository>
     <options>
         <readOnly>true</readOnly>
+        <rescanIntervalS>600</rescanIntervalS>
     </options>
 </configuration>
 `)
@@ -88,6 +90,9 @@ func TestNodeConfig(t *testing.T) {
     <node id="P56IOI7MZJNU2IQGDREYDM2MGTMGL3BXNPQ6W5BTBBZ4TJXZWICQ" name="node two">
         <address>b</address>
     </node>
+    <options>
+        <rescanIntervalS>600</rescanIntervalS>
+    </options>
 </configuration>
 `)
 
@@ -103,9 +108,26 @@ func TestNodeConfig(t *testing.T) {
     <node id="P56IOI7-MZJNU2Y-IQGDREY-DM2MGTI-MGL3BXN-PQ6W5BM-TBBZ4TJ-XZWICQ2" name="node two" compression="true">
         <address>b</address>
     </node>
+    <options>
+        <rescanIntervalS>600</rescanIntervalS>
+    </options>
 </configuration>`)
 
-	for i, data := range [][]byte{v1data, v2data, v3data} {
+	v4data := []byte(`
+<configuration version="4">
+    <repository id="test" directory="~/Sync" ro="true" ignorePerms="false" rescanIntervalS="600">
+        <node id="AIR6LPZ-7K4PTTV-UXQSMUU-CPQ5YWH-OEDFIIQ-JUG777G-2YQXXR5-YD6AWQR"></node>
+        <node id="P56IOI7-MZJNU2Y-IQGDREY-DM2MGTI-MGL3BXN-PQ6W5BM-TBBZ4TJ-XZWICQ2"></node>
+    </repository>
+    <node id="AIR6LPZ-7K4PTTV-UXQSMUU-CPQ5YWH-OEDFIIQ-JUG777G-2YQXXR5-YD6AWQR" name="node one" compression="true">
+        <address>a</address>
+    </node>
+    <node id="P56IOI7-MZJNU2Y-IQGDREY-DM2MGTI-MGL3BXN-PQ6W5BM-TBBZ4TJ-XZWICQ2" name="node two" compression="true">
+        <address>b</address>
+    </node>
+</configuration>`)
+
+	for i, data := range [][]byte{v1data, v2data, v3data, v4data} {
 		cfg, err := Load(bytes.NewReader(data), node1)
 		if err != nil {
 			t.Error(err)
@@ -113,10 +135,11 @@ func TestNodeConfig(t *testing.T) {
 
 		expectedRepos := []RepositoryConfiguration{
 			{
-				ID:        "test",
-				Directory: "~/Sync",
-				Nodes:     []NodeConfiguration{{NodeID: node1}, {NodeID: node4}},
-				ReadOnly:  true,
+				ID:              "test",
+				Directory:       "~/Sync",
+				Nodes:           []RepositoryNodeConfiguration{{NodeID: node1}, {NodeID: node4}},
+				ReadOnly:        true,
+				RescanIntervalS: 600,
 			},
 		}
 		expectedNodes := []NodeConfiguration{
@@ -135,7 +158,7 @@ func TestNodeConfig(t *testing.T) {
 		}
 		expectedNodeIDs := []protocol.NodeID{node1, node4}
 
-		if cfg.Version != 3 {
+		if cfg.Version != 4 {
 			t.Errorf("%d: Incorrect version %d != 3", i, cfg.Version)
 		}
 		if !reflect.DeepEqual(cfg.Repositories, expectedRepos) {
@@ -185,13 +208,14 @@ func TestOverriddenValues(t *testing.T) {
         <globalAnnounceEnabled>false</globalAnnounceEnabled>
         <localAnnounceEnabled>false</localAnnounceEnabled>
         <localAnnouncePort>42123</localAnnouncePort>
+        <localAnnounceMCAddr>quux:3232</localAnnounceMCAddr>
         <parallelRequests>32</parallelRequests>
         <maxSendKbps>1234</maxSendKbps>
-        <rescanIntervalS>600</rescanIntervalS>
         <reconnectionIntervalS>6000</reconnectionIntervalS>
-        <maxChangeKbps>2345</maxChangeKbps>
         <startBrowser>false</startBrowser>
         <upnpEnabled>false</upnpEnabled>
+        <upnpLeaseMinutes>60</upnpLeaseMinutes>
+        <upnpRenewalMinutes>15</upnpRenewalMinutes>
     </options>
 </configuration>
 `)
@@ -202,13 +226,14 @@ func TestOverriddenValues(t *testing.T) {
 		GlobalAnnEnabled:   false,
 		LocalAnnEnabled:    false,
 		LocalAnnPort:       42123,
+		LocalAnnMCAddr:     "quux:3232",
 		ParallelRequests:   32,
 		MaxSendKbps:        1234,
-		RescanIntervalS:    600,
 		ReconnectIntervalS: 6000,
-		MaxChangeKbps:      2345,
 		StartBrowser:       false,
 		UPnPEnabled:        false,
+		UPnPLease:          60,
+		UPnPRenewal:        15,
 	}
 
 	cfg, err := Load(bytes.NewReader(data), node1)

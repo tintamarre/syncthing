@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
 	"code.google.com/p/go.text/unicode/norm"
 
 	"github.com/syncthing/syncthing/lamport"
@@ -22,6 +23,8 @@ import (
 type Walker struct {
 	// Dir is the base directory for the walk
 	Dir string
+	// Limit walking to this path within Dir, or no limit if Sub is blank
+	Sub string
 	// BlockSize controls the size of the block used when hashing.
 	BlockSize int
 	// If IgnoreFile is not empty, it is the name used for the file that holds ignore patterns.
@@ -30,10 +33,6 @@ type Walker struct {
 	TempNamer TempNamer
 	// If CurrentFiler is not nil, it is queried for the current file before rescanning.
 	CurrentFiler CurrentFiler
-	// If Suppressor is not nil, it is queried for supression of modified files.
-	// Suppressed files will be returned with empty metadata and the Suppressed flag set.
-	// Requires CurrentFiler to be set.
-	Suppressor Suppressor
 	// If IgnorePerms is true, changes to permission bits will not be
 	// detected. Scanned files will get zero permission bits and the
 	// NoPermissionBits flag set.
@@ -47,11 +46,6 @@ type TempNamer interface {
 	IsTemporary(path string) bool
 }
 
-type Suppressor interface {
-	// Supress returns true if the update to the named file should be ignored.
-	Suppress(name string, fi os.FileInfo) (bool, bool)
-}
-
 type CurrentFiler interface {
 	// CurrentFile returns the file as seen at last scan.
 	CurrentFile(name string) protocol.FileInfo
@@ -61,7 +55,7 @@ type CurrentFiler interface {
 // file system. Files are blockwise hashed.
 func (w *Walker) Walk() (chan protocol.FileInfo, map[string][]string, error) {
 	if debug {
-		l.Debugln("Walk", w.Dir, w.BlockSize, w.IgnoreFile)
+		l.Debugln("Walk", w.Dir, w.Sub, w.BlockSize, w.IgnoreFile)
 	}
 
 	err := checkDir(w.Dir)
@@ -77,7 +71,7 @@ func (w *Walker) Walk() (chan protocol.FileInfo, map[string][]string, error) {
 
 	go func() {
 		filepath.Walk(w.Dir, w.loadIgnoreFiles(w.Dir, ignore))
-		filepath.Walk(w.Dir, hashFiles)
+		filepath.Walk(filepath.Join(w.Dir, w.Sub), hashFiles)
 		close(files)
 	}()
 
@@ -199,22 +193,6 @@ func (w *Walker) walkAndHashFiles(fchan chan protocol.FileInfo, ign map[string][
 					return nil
 				}
 
-				if w.Suppressor != nil {
-					if cur, prev := w.Suppressor.Suppress(rn, info); cur && !prev {
-						l.Infof("Changes to %q are being temporarily suppressed because it changes too frequently.", p)
-						cf.Flags |= protocol.FlagInvalid
-						cf.Version = lamport.Default.Tick(cf.Version)
-						cf.LocalVersion = 0
-						if debug {
-							l.Debugln("suppressed:", cf)
-						}
-						fchan <- cf
-						return nil
-					} else if prev && !cur {
-						l.Infof("Changes to %q are no longer suppressed.", p)
-					}
-				}
-
 				if debug {
 					l.Debugln("rescan:", cf, info.ModTime().Unix(), info.Mode()&os.ModePerm)
 				}
@@ -252,7 +230,7 @@ func (w *Walker) ignoreFile(patterns map[string][]string, file string) bool {
 	for prefix, pats := range patterns {
 		if prefix == "." || prefix == first || strings.HasPrefix(first, fmt.Sprintf("%s%c", prefix, os.PathSeparator)) {
 			for _, pattern := range pats {
-				if match, _ := filepath.Match(pattern, last); match {
+				if match, _ := filepath.Match(pattern, last); match || pattern == last {
 					return true
 				}
 			}

@@ -126,6 +126,7 @@ func startGUI(cfg config.GUIConfiguration, assetDir string, m *model.Model) erro
 	postRestMux.HandleFunc("/rest/restart", restPostRestart)
 	postRestMux.HandleFunc("/rest/shutdown", restPostShutdown)
 	postRestMux.HandleFunc("/rest/upgrade", restPostUpgrade)
+	postRestMux.HandleFunc("/rest/scan", withModel(m, restPostScan))
 
 	// A handler that splits requests between the two above and disables
 	// caching
@@ -277,7 +278,9 @@ func restPostConfig(m *model.Model, w http.ResponseWriter, r *http.Request) {
 	var newCfg config.Configuration
 	err := json.NewDecoder(r.Body).Decode(&newCfg)
 	if err != nil {
-		l.Warnln(err)
+		l.Warnln("decoding posted config:", err)
+		http.Error(w, err.Error(), 500)
+		return
 	} else {
 		if newCfg.GUI.Password == "" {
 			// Leave it empty
@@ -286,7 +289,9 @@ func restPostConfig(m *model.Model, w http.ResponseWriter, r *http.Request) {
 		} else {
 			hash, err := bcrypt.GenerateFromPassword([]byte(newCfg.GUI.Password), 0)
 			if err != nil {
-				l.Warnln(err)
+				l.Warnln("bcrypting password:", err)
+				http.Error(w, err.Error(), 500)
+				return
 			} else {
 				newCfg.GUI.Password = string(hash)
 			}
@@ -454,12 +459,18 @@ func restGetEvents(w http.ResponseWriter, r *http.Request) {
 	since, _ := strconv.Atoi(sinceStr)
 	limit, _ := strconv.Atoi(limitStr)
 
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+
+	// Flush before blocking, to indicate that we've received the request
+	// and that it should not be retried.
+	f := w.(http.Flusher)
+	f.Flush()
+
 	evs := eventSub.Since(since, nil)
 	if 0 < limit && limit < len(evs) {
 		evs = evs[len(evs)-limit:]
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(evs)
 }
 
@@ -498,9 +509,8 @@ func restGetLang(w http.ResponseWriter, r *http.Request) {
 	lang := r.Header.Get("Accept-Language")
 	var langs []string
 	for _, l := range strings.Split(lang, ",") {
-		if len(l) >= 2 {
-			langs = append(langs, l[:2])
-		}
+		parts := strings.SplitN(l, ";", 2)
+		langs = append(langs, strings.TrimSpace(parts[0]))
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(langs)
@@ -509,7 +519,7 @@ func restGetLang(w http.ResponseWriter, r *http.Request) {
 func restPostUpgrade(w http.ResponseWriter, r *http.Request) {
 	rel, err := upgrade.LatestRelease(strings.Contains(Version, "-beta"))
 	if err != nil {
-		l.Warnln(err)
+		l.Warnln("getting latest release:", err)
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -517,12 +527,22 @@ func restPostUpgrade(w http.ResponseWriter, r *http.Request) {
 	if upgrade.CompareVersions(rel.Tag, Version) == 1 {
 		err = upgrade.UpgradeTo(rel, GoArchExtra)
 		if err != nil {
-			l.Warnln(err)
+			l.Warnln("upgrading:", err)
 			http.Error(w, err.Error(), 500)
 			return
 		}
 
 		restPostRestart(w, r)
+	}
+}
+
+func restPostScan(m *model.Model, w http.ResponseWriter, r *http.Request) {
+	qs := r.URL.Query()
+	repo := qs.Get("repo")
+	sub := qs.Get("sub")
+	err := m.ScanRepoSub(repo, sub)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
 	}
 }
 

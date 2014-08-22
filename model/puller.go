@@ -2,6 +2,25 @@
 // All rights reserved. Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
+/*
+__        __               _             _
+\ \      / /_ _ _ __ _ __ (_)_ __   __ _| |
+ \ \ /\ / / _` | '__| '_ \| | '_ \ / _` | |
+  \ V  V / (_| | |  | | | | | | | | (_| |_|
+   \_/\_/ \__,_|_|  |_| |_|_|_| |_|\__, (_)
+                                   |___/
+
+The code in this file is a piece of crap. Don't base anything on it.
+Refactorin ongoing in new-puller branch.
+
+__        __               _             _
+\ \      / /_ _ _ __ _ __ (_)_ __   __ _| |
+ \ \ /\ / / _` | '__| '_ \| | '_ \ / _` | |
+  \ V  V / (_| | |  | | | | | | | | (_| |_|
+   \_/\_/ \__,_|_|  |_| |_|_|_| |_|\__, (_)
+                                   |___/
+*/
+
 package model
 
 import (
@@ -94,7 +113,7 @@ func newPuller(repoCfg config.RepositoryConfiguration, model *Model, slots int, 
 		if !ok {
 			l.Fatalf("Requested versioning type %q that does not exist", repoCfg.Versioning.Type)
 		}
-		p.versioner = factory(repoCfg.Versioning.Params)
+		p.versioner = factory(repoCfg.ID, repoCfg.Directory, repoCfg.Versioning.Params)
 	}
 
 	if slots > 0 {
@@ -115,7 +134,7 @@ func newPuller(repoCfg config.RepositoryConfiguration, model *Model, slots int, 
 
 func (p *puller) run() {
 	changed := true
-	scanintv := time.Duration(p.cfg.Options.RescanIntervalS) * time.Second
+	scanintv := time.Duration(p.repoCfg.RescanIntervalS) * time.Second
 	lastscan := time.Now()
 	var prevVer uint64
 	var queued int
@@ -222,7 +241,7 @@ func (p *puller) run() {
 }
 
 func (p *puller) runRO() {
-	walkTicker := time.Tick(time.Duration(p.cfg.Options.RescanIntervalS) * time.Second)
+	walkTicker := time.Tick(time.Duration(p.repoCfg.RescanIntervalS) * time.Second)
 
 	for _ = range walkTicker {
 		if debug {
@@ -441,8 +460,8 @@ func (p *puller) handleBlock(b bqBlock) bool {
 			err = os.MkdirAll(dirName, 0777)
 		} else {
 			// We need to make sure the directory is writeable so we can create files in it
-			if (dirName != p.repoCfg.Directory) {
-			   err = os.Chmod(dirName, 0777)
+			if dirName != p.repoCfg.Directory {
+				err = os.Chmod(dirName, 0777)
 			}
 		}
 		if err != nil {
@@ -606,14 +625,14 @@ func (p *puller) handleEmptyBlock(b bqBlock) {
 		// Ensure the file and the directory it is in is writeable so we can remove the file
 		dirName := filepath.Dir(of.filepath)
 		os.Chmod(of.filepath, 0666)
-		if (dirName != p.repoCfg.Directory) {
-		   os.Chmod(dirName, 0777)
+		if dirName != p.repoCfg.Directory {
+			os.Chmod(dirName, 0777)
 		}
 		if p.versioner != nil {
 			if debug {
 				l.Debugln("pull: deleting with versioner")
 			}
-			if err := p.versioner.Archive(p.repoCfg.Directory, of.filepath); err == nil {
+			if err := p.versioner.Archive(of.filepath); err == nil {
 				p.model.updateLocal(p.repoCfg.ID, f)
 			} else if debug {
 				l.Debugln("pull: error:", err)
@@ -709,7 +728,7 @@ func (p *puller) closeFile(f protocol.FileInfo) {
 		l.Infof("open: error: %q / %q: %v", p.repoCfg.ID, f.Name, err)
 		return
 	}
-	hb, _ := scanner.Blocks(fd, scanner.StandardBlockSize)
+	hb, _ := scanner.Blocks(fd, scanner.StandardBlockSize, f.Size())
 	fd.Close()
 
 	if l0, l1 := len(hb), len(f.Blocks); l0 != l1 {
@@ -743,7 +762,7 @@ func (p *puller) closeFile(f protocol.FileInfo) {
 	osutil.ShowFile(of.temp)
 
 	if p.versioner != nil {
-		err := p.versioner.Archive(p.repoCfg.Directory, of.filepath)
+		err := p.versioner.Archive(of.filepath)
 		if err != nil {
 			if debug {
 				l.Debugf("pull: error: %q / %q: %v", p.repoCfg.ID, f.Name, err)

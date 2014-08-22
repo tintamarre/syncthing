@@ -1,10 +1,9 @@
 syncthing
 =========
 
-[![Build Status](https://img.shields.io/travis/syncthing/syncthing.svg?style=flat)](https://travis-ci.org/syncthing/syncthing)
-[![Coverage Status](https://img.shields.io/coveralls/syncthing/syncthing.svg?style=flat)](https://coveralls.io/r/syncthing/syncthing?branch=master)
-[![API Documentation](http://img.shields.io/badge/api-Godoc-blue.svg?style=flat)](http://godoc.org/github.com/syncthing/syncthing)
-[![MIT License](http://img.shields.io/badge/license-MIT-blue.svg?style=flat)](http://opensource.org/licenses/MIT)
+[![Latest Build](http://img.shields.io/jenkins/s/http/build.syncthing.net/syncthing.svg?style=flat-square)](http://build.syncthing.net/job/syncthing/lastBuild/)
+[![API Documentation](http://img.shields.io/badge/api-Godoc-blue.svg?style=flat-square)](http://godoc.org/github.com/syncthing/syncthing)
+[![MIT License](http://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](http://opensource.org/licenses/MIT)
 
 This is the `syncthing` project. The following are the project goals:
 
@@ -26,14 +25,22 @@ for incompatible changes.
 Getting Started
 ---------------
 
-Take a look at the [getting started guide](http://discourse.syncthing.net/t/getting-started/46).
+Take a look at the [getting started guide](http://discourse.syncthing.net/t/46).
+
+Building
+--------
+
+Building Syncthing from source is easy, and there's a
+[guide](http://discourse.syncthing.net/t/44)
+that describes it for both Unix and Windows.
 
 Signed Releases
 ---------------
 
 As of v0.7.0 and onwards, git tags and release binaries are GPG signed with
-the key BCE524C7 (http://nym.se/gpg.txt). The signature is included in the
-normal release bundle as `syncthing.asc` or `syncthing.exe.asc`.
+the key BCE524C7 (http://nym.se/gpg.txt). For release binaries, MD5 and
+SHA1 checksums are calculated and signed, available in the
+md5sum.txt.asc and sha1sum.txt.asc files.
 
 Documentation
 =============

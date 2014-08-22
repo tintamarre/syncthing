@@ -195,16 +195,16 @@
                       </tr>
                       <tr>
                         <th><span class="glyphicon glyphicon-globe"></span>&emsp;<span translate>Global Repository</span></th>
-                        <td class="text-right">{{model[repo.ID].globalFiles | alwaysNumber}} <span translate>items</span>, {{model[repo.ID].globalBytes | binary}}B</td>
+                        <td class="text-right">{{model[repo.ID].globalFiles | alwaysNumber}} <span translate>items</span>, ~{{model[repo.ID].globalBytes | binary}}B</td>
                       </tr>
                       <tr>
                         <th><span class="glyphicon glyphicon-home"></span>&emsp;<span translate>Local Repository</span></th>
-                        <td class="text-right">{{model[repo.ID].localFiles | alwaysNumber}} <span translate>items</span>, {{model[repo.ID].localBytes | binary}}B</td>
+                        <td class="text-right">{{model[repo.ID].localFiles | alwaysNumber}} <span translate>items</span>, ~{{model[repo.ID].localBytes | binary}}B</td>
                       </tr>
                       <tr>
                         <th><span class="glyphicon glyphicon-cloud-download"></span>&emsp;<span translate>Out Of Sync</span></th>
                         <td class="text-right">
-                        <a ng-if="model[repo.ID].needFiles > 0" ng-click="showNeed(repo.ID)" href="">{{model[repo.ID].needFiles | alwaysNumber}} <span translate>items</span>, {{model[repo.ID].needBytes | binary}}B</a>
+                        <a ng-if="model[repo.ID].needFiles > 0" ng-click="showNeed(repo.ID)" href="">{{model[repo.ID].needFiles | alwaysNumber}} <span translate>items</span>, ~{{model[repo.ID].needBytes | binary}}B</a>
                         <span ng-if="model[repo.ID].needFiles == 0">0 <span translate>items</span>, 0 B</span>
                         </td>
                       </tr>
@@ -223,6 +223,10 @@
                         </td>
                       </tr>
                       <tr>
+                        <th><span class="glyphicon glyphicon-refresh"></span>&emsp;<span translate>Rescan Interval</span></th>
+                        <td class="text-right">{{repo.RescanIntervalS}} s</td>
+                      </tr>
+                      <tr>
                         <th><span class="glyphicon glyphicon-share-alt"></span>&emsp;<span translate>Shared With</span></th>
                         <td class="text-right">{{sharesRepo(repo)}}</td>
                       </tr>
@@ -230,6 +234,7 @@
                   </table>
                 </div>
                 <span class="pull-right">
+                  <a class="btn btn-sm btn-default" href="" ng-show="repoStatus(repo.ID) == 'idle'" ng-click="rescanRepo(repo.ID)"><span class="glyphicon glyphicon-refresh"></span>&emsp;<span translate>Rescan</span></a>
                   <a class="btn btn-sm btn-primary" href="" ng-click="editRepo(repo)"><span class="glyphicon glyphicon-pencil"></span>&emsp;<span translate>Edit</span></a>
                   <a class="btn btn-sm btn-danger" ng-if="repo.ReadOnly && model[repo.ID].needFiles > 0" ng-click="override(repo.ID)" href=""><span class="glyphicon glyphicon-upload"></span>&emsp;<span translate>Override Changes</span></a>
                 </span>
@@ -395,6 +400,8 @@
     <p><span translate>Syncthing is restarting.</span> <span translate>Please wait</span>...</p>
   </modal>
 
+  <!-- Upgrading modal -->
+
   <modal id="upgrading" icon="refresh" title="{{'Upgrading' | translate}}" status="info">
     <p><span translate>Syncthing is upgrading.</span> <span translate>Please wait</span>...</p>
   </modal>
@@ -414,7 +421,7 @@
 
   <!-- Node editor modal -->
 
-  <div id="editNode" class="modal fade">
+  <div id="editNode" class="modal fade" tabindex="-1">
     <div class="modal-dialog modal-lg">
       <div class="modal-content">
         <div class="modal-header">
@@ -437,7 +444,8 @@
             <div class="form-group">
               <label translate for="name">Node Name</label>
               <input placeholder="Home Server" id="name" class="form-control" type="text" ng-model="currentNode.Name"></input>
-              <p translate class="help-block">Shown instead of Node ID in the cluster status.</p>
+              <p translate ng-if="currentNode.NodeID == myID" class="help-block">Shown instead of Node ID in the cluster status. Will be advertised to other nodes as an optional default name.</p>
+              <p translate ng-if="currentNode.NodeID != myID" class="help-block">Shown instead of Node ID in the cluster status. Will be updated to the name the node advertises if left empty.</p>
             </div>
             <div class="form-group">
               <label translate for="addresses">Addresses</label>
@@ -464,7 +472,7 @@
 
   <!-- Repo editor modal -->
 
-  <div id="editRepo" class="modal fade">
+  <div id="editRepo" class="modal fade" tabindex="-1">
     <div class="modal-dialog modal-lg">
       <div class="modal-content">
         <div class="modal-header">
@@ -491,6 +499,13 @@
                   <p class="help-block">
                     <span translate ng-if="repoEditor.repoPath.$valid || repoEditor.repoPath.$pristine">Path to the repository on the local computer. Will be created if it does not exist. The tilde character (~) can be used as a shortcut for</span> <code>{{system.tilde}}</code>.
                     <span translate ng-if="repoEditor.repoPath.$error.required && repoEditor.repoPath.$dirty">The repository path cannot be blank.</span>
+                  </p>
+                </div>
+                <div class="form-group" ng-class="{'has-error': repoEditor.rescanIntervalS.$invalid && repoEditor.rescanIntervalS.$dirty}">
+                  <label for="rescanIntervalS"><span translate>Rescan Interval</span> (s)</label>
+                  <input name="rescanIntervalS" placeholder="60" id="rescanIntervalS" class="form-control" type="number" ng-model="currentRepo.RescanIntervalS" required min="5"></input>
+                  <p class="help-block">
+                    <span translate ng-if="!repoEditor.rescanIntervalS.$valid && repoEditor.rescanIntervalS.$dirty">The rescan interval must be at least 5 seconds.</span>
                   </p>
                 </div>
               </div>
@@ -558,7 +573,7 @@
 
   <!-- Settings modal -->
 
-  <div id="settings" class="modal fade">
+  <div id="settings" class="modal fade" tabindex="-1">
     <div class="modal-dialog modal-lg">
       <div class="modal-content">
         <div class="modal-header">
@@ -576,10 +591,6 @@
                 <div class="form-group">
                   <label translate for="MaxSendKbps">Outgoing Rate Limit (KiB/s)</label>
                   <input id="MaxSendKbps" class="form-control" type="number" ng-model="tmpOptions.MaxSendKbps">
-                </div>
-                <div class="form-group">
-                  <label translate for="RescanIntervalS">Rescan Interval (s)</label>
-                  <input id="RescanIntervalS" class="form-control" type="number" ng-model="tmpOptions.RescanIntervalS">
                 </div>
                 <!--
                 <div class="form-group">
@@ -609,10 +620,6 @@
                       <span translate>Local Discovery</span> <input id="LocalAnnEnabled" type="checkbox" ng-model="tmpOptions.LocalAnnEnabled">
                     </label>
                   </div>
-                </div>
-                <div class="form-group">
-                  <label translate for="LocalAnnPort">Local Discovery Port</label>
-                  <input ng-disabled="!tmpOptions.LocalAnnEnabled" id="LocalAnnPort" class="form-control" type="number" ng-model="tmpOptions.LocalAnnPort">
                 </div>
                 <div class="form-group">
                   <div class="checkbox">
@@ -684,7 +691,7 @@
 
   <!-- Usage report modal -->
 
-  <div id="ur" class="modal fade">
+  <div id="ur" class="modal fade" data-backdrop="static" data-keyboard="false" tabindex="-1">
     <div class="modal-dialog modal-lg">
       <div class="modal-content">
         <div class="modal-header alert alert-success">
@@ -739,6 +746,7 @@
         <ul>
           <li>James Patterson</li>
           <li>Jens Diemer</li>
+          <li>Marcin Dziadus</li>
           <li>Philippe Schommers</li>
           <li>Ryan Sullivan</li>
           <li>Tully Robinson</li>
@@ -750,7 +758,7 @@
 
     <p translate>Syncthing includes the following software or portions thereof:</p>
     <ul>
-      <li><a href="http://golang.org/">The Go Programming Languange</a>, Copyright &copy; 2012 The Go Authors.</li>
+      <li><a href="http://golang.org/">The Go Programming Language</a>, Copyright &copy; 2012 The Go Authors.</li>
       <li><a href="https://bitbucket.org/kardianos/osext">kardianos/osext</a>, Copyright &copy; 2012 Daniel Theophanes.</li>
       <li><a href="https://code.google.com/p/snappy-go/">snappy-go</a>, Copyright &copy; 2011 The Snappy-Go Authors.</li>
       <li><a href="https://github.com/golang/groupcache">groupcache/lru</a>, Copyright &copy; 2013 Google Inc.</li>

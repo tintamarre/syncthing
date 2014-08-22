@@ -73,15 +73,17 @@ func init() {
 }
 
 var (
-	cfg        config.Configuration
-	myID       protocol.NodeID
-	confDir    string
-	logFlags   int = log.Ltime
-	rateBucket *ratelimit.Bucket
-	stop       = make(chan bool)
-	discoverer *discover.Discoverer
-	lockConn   *net.TCPListener
-	lockPort   int
+	cfg          config.Configuration
+	myID         protocol.NodeID
+	confDir      string
+	logFlags     int = log.Ltime
+	rateBucket   *ratelimit.Bucket
+	stop         = make(chan bool)
+	discoverer   *discover.Discoverer
+	lockConn     *net.TCPListener
+	lockPort     int
+	externalPort int
+	cert         tls.Certificate
 )
 
 const (
@@ -104,9 +106,6 @@ The following enviroment variables are interpreted by syncthing:
                Set this variable when running under a service manager such as
                runit, launchd, etc.
 
- STPROFILER    Set to a listen address such as "127.0.0.1:9090" to start the
-               profiler with HTTP access.
-
  STTRACE       A comma separated string of facilities to trace. The valid
                facility strings:
                - "beacon"   (the beacon package)
@@ -120,9 +119,18 @@ The following enviroment variables are interpreted by syncthing:
                - "xdr"      (the xdr package)
                - "all"      (all of the above)
 
- STCPUPROFILE  Write CPU profile to the specified file.
-
  STGUIASSETS   Directory to load GUI assets from. Overrides compiled in assets.
+
+ STPROFILER    Set to a listen address such as "127.0.0.1:9090" to start the
+               profiler with HTTP access.
+
+ STCPUPROFILE  Write a CPU profile to cpu-$pid.pprof on exit.
+
+ STHEAPPROFILE Write heap profiles to heap-$pid-$timestamp.pprof each time
+               heap usage increases.
+
+ STPERFSTATS   Write running performance statistics to perf-$pid.csv. Not
+               supported on Windows.
 
  STDEADLOCKTIMEOUT  Alter deadlock detection timeout (seconds; default 1200).`
 )
@@ -248,7 +256,7 @@ func main() {
 	// Ensure that our home directory exists and that we have a certificate and key.
 
 	ensureDir(confDir, 0700)
-	cert, err := loadCert(confDir, "")
+	cert, err = loadCert(confDir, "")
 	if err != nil {
 		newCertificate(confDir, "")
 		cert, err = loadCert(confDir, "")
@@ -266,6 +274,8 @@ func main() {
 	cfgFile := filepath.Join(confDir, "config.xml")
 	go saveConfigLoop(cfgFile)
 
+	var myName string
+
 	// Load the configuration file, if it exists.
 	// If it does not, create a template.
 
@@ -277,25 +287,30 @@ func main() {
 			l.Fatalln(err)
 		}
 		cf.Close()
+		myCfg := cfg.GetNodeConfiguration(myID)
+		if myCfg == nil || myCfg.Name == "" {
+			myName, _ = os.Hostname()
+		} else {
+			myName = myCfg.Name
+		}
 	} else {
 		l.Infoln("No config file; starting with empty defaults")
-		name, _ := os.Hostname()
+		myName, _ = os.Hostname()
 		defaultRepo := filepath.Join(getHomeDir(), "Sync")
-		ensureDir(defaultRepo, 0755)
 
 		cfg, err = config.Load(nil, myID)
 		cfg.Repositories = []config.RepositoryConfiguration{
 			{
 				ID:        "default",
 				Directory: defaultRepo,
-				Nodes:     []config.NodeConfiguration{{NodeID: myID}},
+				Nodes:     []config.RepositoryNodeConfiguration{{NodeID: myID}},
 			},
 		}
 		cfg.Nodes = []config.NodeConfiguration{
 			{
 				NodeID:    myID,
 				Addresses: []string{"dynamic"},
-				Name:      name,
+				Name:      myName,
 			},
 		}
 
@@ -356,9 +371,9 @@ func main() {
 
 	db, err := leveldb.OpenFile(filepath.Join(confDir, "index"), nil)
 	if err != nil {
-		l.Fatalln("leveldb.OpenFile():", err)
+		l.Fatalln("Cannot open database:", err, "- Is another copy of Syncthing already running?")
 	}
-	m := model.NewModel(confDir, &cfg, "syncthing", Version, db)
+	m := model.NewModel(confDir, &cfg, myName, "syncthing", Version, db)
 
 nextRepo:
 	for i, repo := range cfg.Repositories {
@@ -470,11 +485,8 @@ nextRepo:
 
 	// UPnP
 
-	var externalPort = 0
 	if cfg.Options.UPnPEnabled {
-		// We seed the random number generator with the node ID to get a
-		// repeatable sequence of random external ports.
-		externalPort = setupUPnP(rand.NewSource(certSeed(cert.Certificate[0])))
+		setupUPnP()
 	}
 
 	// Routine to connect out to configured nodes
@@ -498,7 +510,7 @@ nextRepo:
 	}
 
 	if cpuprof := os.Getenv("STCPUPROFILE"); len(cpuprof) > 0 {
-		f, err := os.Create(cpuprof)
+		f, err := os.Create(fmt.Sprintf("cpu-%d.pprof", os.Getpid()))
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -561,8 +573,7 @@ func waitForParentExit() {
 	l.Infoln("Continuing")
 }
 
-func setupUPnP(r rand.Source) int {
-	var externalPort = 0
+func setupUPnP() {
 	if len(cfg.Options.ListenAddress) == 1 {
 		_, portStr, err := net.SplitHostPort(cfg.Options.ListenAddress[0])
 		if err != nil {
@@ -572,17 +583,11 @@ func setupUPnP(r rand.Source) int {
 			port, _ := strconv.Atoi(portStr)
 			igd, err := upnp.Discover()
 			if err == nil {
-				for i := 0; i < 10; i++ {
-					r := 1024 + int(r.Int63()%(65535-1024))
-					err := igd.AddPortMapping(upnp.TCP, r, port, "syncthing", 0)
-					if err == nil {
-						externalPort = r
-						l.Infoln("Created UPnP port mapping - external port", externalPort)
-						break
-					}
-				}
+				externalPort = setupExternalPort(igd, port)
 				if externalPort == 0 {
 					l.Warnln("Failed to create UPnP port mapping")
+				} else {
+					l.Infoln("Created UPnP port mapping - external port", externalPort)
 				}
 			} else {
 				l.Infof("No UPnP gateway detected")
@@ -590,11 +595,57 @@ func setupUPnP(r rand.Source) int {
 					l.Debugf("UPnP: %v", err)
 				}
 			}
+			if cfg.Options.UPnPRenewal > 0 {
+				go renewUPnP(port)
+			}
 		}
 	} else {
 		l.Warnln("Multiple listening addresses; not attempting UPnP port mapping")
 	}
-	return externalPort
+}
+
+func setupExternalPort(igd *upnp.IGD, port int) int {
+	// We seed the random number generator with the node ID to get a
+	// repeatable sequence of random external ports.
+	rnd := rand.NewSource(certSeed(cert.Certificate[0]))
+	for i := 0; i < 10; i++ {
+		r := 1024 + int(rnd.Int63()%(65535-1024))
+		err := igd.AddPortMapping(upnp.TCP, r, port, "syncthing", cfg.Options.UPnPLease*60)
+		if err == nil {
+			return r
+		}
+	}
+	return 0
+}
+
+func renewUPnP(port int) {
+	for {
+		time.Sleep(time.Duration(cfg.Options.UPnPRenewal) * time.Minute)
+
+		igd, err := upnp.Discover()
+		if err != nil {
+			continue
+		}
+
+		// Just renew the same port that we already have
+		err = igd.AddPortMapping(upnp.TCP, externalPort, port, "syncthing", cfg.Options.UPnPLease*60)
+		if err == nil {
+			l.Infoln("Renewed UPnP port mapping - external port", externalPort)
+			continue
+		}
+
+		// Something strange has happened. Perhaps the gateway has changed?
+		// Retry the same port sequence from the beginning.
+		r := setupExternalPort(igd, port)
+		if r != 0 {
+			externalPort = r
+			l.Infoln("Updated UPnP port mapping - external port", externalPort)
+			discoverer.StopGlobal()
+			discoverer.StartGlobal(cfg.Options.GlobalAnnServer, uint16(r))
+			continue
+		}
+		l.Warnln("Failed to update UPnP port mapping - external port", externalPort)
+	}
 }
 
 func resetRepositories() {
@@ -795,6 +846,10 @@ next:
 			}
 		}
 
+		events.Default.Log(events.NodeRejected, map[string]string{
+			"node":    remoteID.String(),
+			"address": conn.RemoteAddr().String(),
+		})
 		l.Infof("Connection from %s with unknown node ID %s; ignoring", conn.RemoteAddr(), remoteID)
 		conn.Close()
 	}
@@ -934,19 +989,15 @@ func setTCPOptions(conn *net.TCPConn) {
 }
 
 func discovery(extPort int) *discover.Discoverer {
-	disc, err := discover.NewDiscoverer(myID, cfg.Options.ListenAddress, cfg.Options.LocalAnnPort)
-	if err != nil {
-		l.Warnf("No discovery possible (%v)", err)
-		return nil
-	}
+	disc := discover.NewDiscoverer(myID, cfg.Options.ListenAddress)
 
 	if cfg.Options.LocalAnnEnabled {
-		l.Infoln("Sending local discovery announcements")
-		disc.StartLocal()
+		l.Infoln("Starting local discovery announcements")
+		disc.StartLocal(cfg.Options.LocalAnnPort, cfg.Options.LocalAnnMCAddr)
 	}
 
 	if cfg.Options.GlobalAnnEnabled {
-		l.Infoln("Sending global discovery announcements")
+		l.Infoln("Starting global discovery announcements")
 		disc.StartGlobal(cfg.Options.GlobalAnnServer, uint16(extPort))
 	}
 

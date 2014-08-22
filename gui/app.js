@@ -25,6 +25,10 @@ syncthing.controller('EventCtrl', function ($scope, $http) {
     var online = false;
     var lastID = 0;
 
+    $(window).bind('beforeunload', function() {
+        online = false;
+    });
+
     var successFn = function (data) {
         if (!online) {
             $scope.$emit('UIOnline');
@@ -86,11 +90,19 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
     $scope.upgradeInfo = {};
 
     $http.get(urlbase+"/lang").success(function (langs) {
-        var lang;
+        // Find the first language in the list provided by the user's browser
+        // that is a prefix of a language we have available. That is, "en"
+        // sent by the browser will match "en" or "en-US", while "zh-TW" will
+        // match only "zh-TW" and not "zh-CN".
+
+        var lang, matching;
         for (var i = 0; i < langs.length; i++) {
             lang = langs[i];
-            if (validLangs.indexOf(lang) >= 0) {
-                $translate.use(lang);
+            matching = validLangs.filter(function (l) {
+                return lang.length >= 2 && l.indexOf(lang) == 0;
+            });
+            if (matching.length >= 1) {
+                $translate.use(matching[0]);
                 break;
             }
         }
@@ -128,7 +140,7 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
     $scope.$on('UIOffline', function (event, arg) {
         console.log('UIOffline');
         if (!restarting) {
-            $('#networkError').modal({backdrop: 'static', keyboard: false});
+            $('#networkError').modal();
         }
     });
 
@@ -188,7 +200,7 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
                 document.cookie = "firstVisit=" + Date.now() + ";max-age=" + 30*24*3600;
             } else {
                 if (+firstVisit < Date.now() - 4*3600*1000){
-                    $('#ur').modal({backdrop: 'static', keyboard: false});
+                    $('#ur').modal();
                 }
             }
         }
@@ -471,7 +483,7 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
         $scope.tmpOptions = angular.copy($scope.config.Options);
         $scope.tmpOptions.UREnabled = ($scope.tmpOptions.URAccepted > 0);
         $scope.tmpGUI = angular.copy($scope.config.GUI);
-        $('#settings').modal({backdrop: 'static', keyboard: true});
+        $('#settings').modal();
     };
 
     $scope.saveConfig = function() {
@@ -514,7 +526,7 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
 
     $scope.restart = function () {
         restarting = true;
-        $('#restarting').modal({backdrop: 'static', keyboard: false});
+        $('#restarting').modal();
         $http.post(urlbase + '/restart');
         $scope.configInSync = true;
 
@@ -536,9 +548,9 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
 
     $scope.upgrade = function () {
         restarting = true;
-        $('#upgrading').modal({backdrop: 'static', keyboard: false});
+        $('#upgrading').modal();
         $http.post(urlbase + '/upgrade').success(function () {
-            $('#restarting').modal({backdrop: 'static', keyboard: false});
+            $('#restarting').modal();
             $('#upgrading').modal('hide');
         }).error(function () {
             $('#upgrading').modal('hide');
@@ -548,7 +560,7 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
     $scope.shutdown = function () {
         restarting = true;
         $http.post(urlbase + '/shutdown').success(function () {
-            $('#shutdown').modal({backdrop: 'static', keyboard: false});
+            $('#shutdown').modal();
         });
         $scope.configInSync = true;
     };
@@ -559,7 +571,7 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
         $scope.editingSelf = (nodeCfg.NodeID == $scope.myID);
         $scope.currentNode.AddressesStr = nodeCfg.Addresses.join(', ');
         $scope.nodeEditor.$setPristine();
-        $('#editNode').modal({backdrop: 'static', keyboard: true});
+        $('#editNode').modal();
     };
 
     $scope.idNode = function () {
@@ -571,7 +583,7 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
         $scope.editingExisting = false;
         $scope.editingSelf = false;
         $scope.nodeEditor.$setPristine();
-        $('#editNode').modal({backdrop: 'static', keyboard: true});
+        $('#editNode').modal();
     };
 
     $scope.deleteNode = function () {
@@ -679,14 +691,14 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
         $scope.currentRepo.simpleKeep = $scope.currentRepo.simpleKeep || 5;
         $scope.editingExisting = true;
         $scope.repoEditor.$setPristine();
-        $('#editRepo').modal({backdrop: 'static', keyboard: true});
+        $('#editRepo').modal();
     };
 
     $scope.addRepo = function () {
         $scope.currentRepo = {selectedNodes: {}};
         $scope.editingExisting = false;
         $scope.repoEditor.$setPristine();
-        $('#editRepo').modal({backdrop: 'static', keyboard: true});
+        $('#editRepo').modal();
     };
 
     $scope.saveRepo = function () {
@@ -747,8 +759,6 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
         cfg.APIKey = randomString(30, 32);
     };
 
-
-
     $scope.acceptUR = function () {
         $scope.config.Options.URAccepted = 1000; // Larger than the largest existing report version
         $scope.saveConfig();
@@ -763,7 +773,7 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
 
     $scope.showNeed = function (repo) {
         $scope.neededLoaded = false;
-        $('#needed').modal({backdrop: 'static', keyboard: true});
+        $('#needed').modal();
         $http.get(urlbase + "/need?repo=" + encodeURIComponent(repo)).success(function (data) {
             $scope.needed = data;
             $scope.neededLoaded = true;
@@ -786,9 +796,7 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
     };
 
     $scope.override = function (repo) {
-        $http.post(urlbase + "/model/override?repo=" + encodeURIComponent(repo)).success(function () {
-            $scope.refresh();
-        });
+        $http.post(urlbase + "/model/override?repo=" + encodeURIComponent(repo));
     };
 
     $scope.about = function () {
@@ -797,6 +805,10 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $loca
 
     $scope.showReportPreview = function () {
         $scope.reportPreview = true;
+    };
+
+    $scope.rescanRepo = function (repo) {
+        $http.post(urlbase + "/scan?repo=" + encodeURIComponent(repo));
     };
 
     $scope.init();
